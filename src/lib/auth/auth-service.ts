@@ -92,73 +92,35 @@ export class AuthService {
     }
   }
 
-  async getCurrentUser() {
-    try {
-      console.log('🔍 Getting current user from Supabase...')
-      const { data: { user }, error } = await this.supabase.auth.getUser()
-      
-      if (error) {
-        console.error('❌ Supabase auth error:', error)
-        
-        // Handle specific JWT/user mismatch errors
-        if (error.message?.includes('User from sub claim in JWT does not exist') || 
-            error.message?.includes('JWT') ||
-            error.status === 401) {
-          console.log('🧹 Invalid token detected, clearing session...')
-          await this.signOut()
-          return { user: null, profile: null, error: 'Session expired' }
-        }
-        
-        throw error
-      }
-      if (!user) {
-        console.log('ℹ️ No authenticated user found')
-        return { user: null, profile: null, error: null }
-      }
+async getCurrentUser() {
+  // Always create a new client in async functions
+  const supabase = createClient();
 
-      console.log('✅ User found:', user.id, user.email)
-      
-      // Test database connectivity
-      console.log('🔍 Testing database connection...')
-      try {
-        const { error: dbError } = await this.supabase.from('user_profiles').select('count').limit(1)
-        if (dbError) {
-          console.error('❌ Database connection test failed:', dbError)
-        } else {
-          console.log('✅ Database connection successful')
-        }
-      } catch (dbTestError) {
-        console.error('❌ Database test error:', dbTestError)
-      }
-      
-      const profile = await this.getUserProfile(user.id)
-      console.log('👤 Profile loaded:', profile ? `${profile.first_name} ${profile.last_name}` : 'No profile')
-      return { user, profile, error: null }
-    } catch (error) {
-      console.error('❌ Get current user error:', error)
-      
-      // Handle authentication errors by clearing session
-      if (error instanceof Error && (
-          error.message.includes('JWT') || 
-          error.message.includes('token') ||
-          error.message.includes('User from sub claim')
-        )) {
-        console.log('🧹 Clearing invalid session due to auth error...')
-        await this.signOut()
-        return { 
-          user: null, 
-          profile: null, 
-          error: 'Session expired, please login again' 
-        }
-      }
-      
-      return { 
-        user: null, 
-        profile: null, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      }
-    }
+  console.log('🔍 Checking for active session...');
+  
+  // Use getSession() which gracefully handles a missing session
+  const { data: { session }, error } = await supabase.auth.getSession();
+
+  // If there's an error fetching the session, log it and return null
+  if (error) {
+    console.error('❌ Error fetching session:', error.message);
+    return null;
   }
+
+  // If no session exists, return null
+  if (!session?.user) {
+    return null;
+  }
+
+  // Get user profile along with user data
+  const profile = await this.getUserProfile(session.user.id);
+  
+  return { 
+    user: session.user, 
+    profile, 
+    error: null 
+  };
+};
 
   async resetPassword({ email }: ForgotPasswordForm) {
     try {

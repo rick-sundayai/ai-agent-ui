@@ -48,17 +48,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const initAuth = async () => {
       try {
         console.log('🔄 Initializing authentication...')
-        const { user, profile } = await authService.getCurrentUser()
-        
-        console.log('👤 User:', user ? `${user.id} (${user.email})` : 'No user')
-        console.log('👤 Profile:', profile ? `${profile.first_name} ${profile.last_name} (${profile.role})` : 'No profile')
-        
-        setState({
-          user: user ? { id: user.id, email: user.email || '', profile } : null,
-          profile,
-          loading: false,
-          error: null
-        })
+        const authData = await authService.getCurrentUser()
+
+        if (authData) {
+          const { user, profile } = authData;
+          console.log('👤 User:', user ? `${user.id} (${user.email})` : 'No user');
+          console.log('👤 Profile:', profile ? `${profile.first_name} ${profile.last_name} (${profile.role})` : 'No profile');
+          
+          setState({
+            user: user ? { id: user.id, email: user.email || '', profile } : null,
+            profile,
+            loading: false,
+            error: null
+          });
+        } else {
+          console.log('👤 User: No user');
+          console.log('👤 Profile: No profile');
+          
+          setState({
+            user: null,
+            profile: null,
+            loading: false,
+            error: null
+          });
+        }
       } catch (error) {
         console.error('❌ Auth initialization error:', error)
         setState({
@@ -73,12 +86,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initAuth()
   }, [])
 
+  // (The rest of your file remains the same)
+  // ...
   // Listen for auth changes
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth state changed:', event, session?.user?.id)
-        
+
         if (event === 'SIGNED_IN' && session?.user) {
           // User signed in - get their profile
           try {
@@ -90,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               loading: false,
               error: null
             })
-            
+
             // Log sign-in activity
             await authService.logActivity('sign_in', 'auth', session.user.id)
           } catch (error) {
@@ -147,19 +162,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     try {
       const { user, profile, error } = await authService.signIn(credentials)
-      
+
       if (error) {
         setState(prev => ({ ...prev, loading: false, error }))
         return { success: false, error }
       }
-      
+
       setState({
         user: user ? { id: user.id, email: user.email || '', profile } : null,
         profile,
         loading: false,
         error: null
       })
-      
+
       return { success: true }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Sign in failed'
@@ -178,12 +193,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       
       const { success, error } = await authService.signOut()
-      
+
       if (!success && error) {
         setState(prev => ({ ...prev, loading: false, error }))
         return { success: false, error }
       }
-      
+
       setState({
         user: null,
         profile: null,
@@ -204,12 +219,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     try {
       const { success, error } = await authService.resetPassword(form)
-      
+
       if (!success && error) {
         setState(prev => ({ ...prev, error }))
         return { success: false, error }
       }
-      
+
       return { success: true }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Password reset failed'
@@ -223,12 +238,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     try {
       const { error } = await authService.submitRegistrationRequest(request)
-      
+
       if (error) {
         setState(prev => ({ ...prev, error }))
         return { success: false, error }
       }
-      
+
       return { success: true }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Registration request failed'
@@ -246,17 +261,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     try {
       const { profile, error } = await authService.updateProfile(state.user.id, updates)
-      
+
       if (error) {
         setState(prev => ({ ...prev, error }))
         return { success: false, error }
       }
-      
+
       setState(prev => ({
         ...prev,
         profile: profile || prev.profile
       }))
-      
+
       // Log profile update activity
       await authService.logActivity('profile_update', 'user_profiles', state.user.id, updates)
       
@@ -270,7 +285,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshProfile = async () => {
     if (!state.user) return
-    
+
     try {
       const profile = await authService.getUserProfile(state.user.id)
       setState(prev => ({ ...prev, profile }))
@@ -285,7 +300,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPermission = async (resource: string, action: string): Promise<boolean> => {
     if (!state.profile?.role) return false
-    
+
     try {
       return await authService.hasPermission(state.profile.role, resource, action)
     } catch (error) {
