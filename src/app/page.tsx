@@ -53,6 +53,8 @@ const welcomeSuggestions: SuggestionChip[] = [
 ]
 
 export default function Home() {
+  console.log('🏠 Home page rendering...')
+  
   const [currentSessionId, setCurrentSessionId] = useState('1')
   const [aiStatus, setAiStatus] = useState<AIStatus>('ready')
   const [selectedComponent] = useState(null)

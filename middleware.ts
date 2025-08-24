@@ -1,6 +1,13 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import type { UserRole } from '@/types'
+import { getDefaultRedirectForRole } from '@/lib/auth/permissions'
+
+// This should log when the middleware file is loaded
+console.log('🔥 MIDDLEWARE FILE LOADED - Config:', {
+  nodeEnv: process.env.NODE_ENV,
+  timestamp: new Date().toISOString()
+})
 
 // ============================================================================
 // ROUTE CONFIGURATION
@@ -8,7 +15,6 @@ import type { UserRole } from '@/types'
 
 // Public routes that don't require authentication
 const PUBLIC_ROUTES = [
-  '/',
   '/auth/login',
   '/auth/register', 
   '/auth/forgot-password',
@@ -47,14 +53,20 @@ const PROTECTED_ROUTES = [
 // ============================================================================
 
 export async function middleware(request: NextRequest) {
+  const startTime = Date.now()
+  console.log('🚀 MIDDLEWARE START - Path:', request.nextUrl.pathname, 'Method:', request.method)
+  
   try {
     const { pathname, searchParams } = request.nextUrl
     const response = NextResponse.next()
+    
+    console.log('📍 Processing path:', pathname)
+    console.log('🔧 Matcher config should include this path')
 
     // Create Supabase client for server-side operations
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
           getAll() {
@@ -73,17 +85,21 @@ export async function middleware(request: NextRequest) {
     // AUTHENTICATION CHECK
     // ========================================================================
 
+    console.log('🔍 Checking session...')
     const { data: { session }, error: sessionError } = await supabase.auth.getSession()
     
     if (sessionError) {
-      console.error('Session error in middleware:', sessionError)
+      console.error('❌ Session error in middleware:', sessionError)
     }
 
     const user = session?.user
+    console.log('👤 User found:', user ? `${user.id} (${user.email})` : 'No user')
+    
     let userProfile = null
 
     // Get user profile if authenticated
     if (user) {
+      console.log('🔍 Fetching user profile for:', user.id)
       try {
         const { data: profile, error: profileError } = await supabase
           .from('user_profiles')
@@ -92,12 +108,18 @@ export async function middleware(request: NextRequest) {
           .single()
 
         if (profileError) {
-          console.error('Profile error in middleware:', profileError)
+          console.error('❌ Profile error in middleware:', profileError)
+          // Continue without profile - middleware will handle accordingly
+          if (profileError.code === '42P17') {
+            console.log('⚠️ RLS infinite recursion detected - continuing without profile')
+          }
         } else {
           userProfile = profile
+          console.log('✅ Profile loaded:', profile ? `${profile.first_name} ${profile.last_name} (${profile.role})` : 'No profile data')
         }
       } catch (error) {
-        console.error('Error fetching user profile in middleware:', error)
+        console.error('❌ Exception fetching user profile in middleware:', error)
+        // Continue without profile rather than failing
       }
     }
 
@@ -105,11 +127,33 @@ export async function middleware(request: NextRequest) {
     // ROUTE PROTECTION LOGIC
     // ========================================================================
 
-    const isPublicRoute = PUBLIC_ROUTES.some(route => {
-      if (route === '/') return pathname === '/'
-      return pathname.startsWith(route)
-    })
+    // ========================================================================
+    // HOME PAGE ROUTING
+    // ========================================================================
+    
+    // Handle home page specially
+    if (pathname === '/') {
+      console.log('🏠 Home page detected!')
+      console.log('👤 Auth status:', { 
+        hasUser: !!user, 
+        hasProfile: !!userProfile, 
+        status: userProfile?.status,
+        role: userProfile?.role 
+      })
+      
+      if (user && userProfile && userProfile.status === 'active') {
+        // Authenticated user - redirect to their dashboard
+        const redirectTo = getDefaultRedirectForRole(userProfile.role)
+        console.log('✅ Redirecting authenticated user to:', redirectTo)
+        return NextResponse.redirect(new URL(redirectTo, request.url))
+      } else {
+        // Unauthenticated user - redirect to login
+        console.log('🔑 Redirecting unauthenticated user to: /auth/login')
+        return NextResponse.redirect(new URL('/auth/login', request.url))
+      }
+    }
 
+    const isPublicRoute = PUBLIC_ROUTES.some(route => pathname.startsWith(route))
     const isAdminRoute = ADMIN_ROUTES.some(route => pathname.startsWith(route))
     const isSalesManagerRoute = SALES_MANAGER_ROUTES.some(route => pathname.startsWith(route))
     const isProtectedRoute = PROTECTED_ROUTES.some(route => pathname.startsWith(route)) ||
@@ -192,19 +236,31 @@ export async function middleware(request: NextRequest) {
       response.headers.set('x-user-status', userProfile.status)
     }
 
+    const endTime = Date.now()
+    console.log(`⚡ MIDDLEWARE END - Path: ${pathname} - Duration: ${endTime - startTime}ms - No redirect`)
     return response
 
   } catch (error) {
-    console.error('Middleware error:', error)
-    
-    // In case of any error, redirect to login for protected routes
-    const { pathname } = request.nextUrl
-    const isPublicRoute = PUBLIC_ROUTES.some(route => {
-      if (route === '/') return pathname === '/'
-      return pathname.startsWith(route)
+    console.error('❌ Critical middleware error:', error)
+    console.log('🔧 Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack?.substring(0, 500) : 'No stack trace',
+      pathname: request.nextUrl.pathname
     })
+    
+    const { pathname } = request.nextUrl
+    
+    // For home page, always redirect to login if middleware fails
+    if (pathname === '/') {
+      console.log('🚨 Middleware failed on home page - forcing redirect to login')
+      return NextResponse.redirect(new URL('/auth/login', request.url))
+    }
+    
+    // In case of any error, redirect to login for protected routes  
+    const isPublicRoute = PUBLIC_ROUTES.some(route => pathname.startsWith(route))
 
     if (!isPublicRoute) {
+      console.log('🚨 Middleware failed on protected route - redirecting to login')
       return NextResponse.redirect(new URL('/auth/login', request.url))
     }
 
@@ -216,18 +272,7 @@ export async function middleware(request: NextRequest) {
 // UTILITY FUNCTIONS
 // ============================================================================
 
-function getDefaultRedirectForRole(role: UserRole): string {
-  switch (role) {
-    case 'admin':
-      return '/admin/dashboard'
-    case 'sales_manager':
-      return '/dashboard/sales'
-    case 'recruiter':
-      return '/dashboard/recruiter'
-    default:
-      return '/dashboard'
-  }
-}
+// getDefaultRedirectForRole is now imported from @/lib/auth/permissions
 
 // ============================================================================
 // MIDDLEWARE CONFIGURATION
@@ -236,13 +281,16 @@ function getDefaultRedirectForRole(role: UserRole): string {
 export const config = {
   matcher: [
     /*
-     * Match all request paths except for the ones starting with:
-     * - api (API routes)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder files
+     * Explicitly match paths we want middleware to handle
+     * This is more reliable than complex regex exclusions
      */
-    '/((?!api|_next/static|_next/image|favicon.ico|.*\\.png$|.*\\.jpg$|.*\\.jpeg$|.*\\.gif$|.*\\.svg$|.*\\.ico$|.*\\.webp$).*)',
+    '/',
+    '/auth/:path*',
+    '/admin/:path*', 
+    '/dashboard/:path*',
+    '/profile',
+    '/settings',
+    '/unauthorized',
+    '/((?!api|_next/static|_next/image|_next/webpack-hmr|favicon.ico|.*\\.(png|jpg|jpeg|gif|svg|ico|webp)$).*)',
   ],
 }

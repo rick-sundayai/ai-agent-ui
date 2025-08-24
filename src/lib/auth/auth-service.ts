@@ -45,11 +45,13 @@ export class AuthService {
 
   async signOut() {
     try {
+      console.log('🚪 Signing out user...')
       const { error } = await this.supabase.auth.signOut()
       if (error) throw error
+      console.log('✅ User signed out successfully')
       return { success: true, error: null }
     } catch (error) {
-      console.error('Sign out error:', error)
+      console.error('❌ Sign out error:', error)
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -57,17 +59,99 @@ export class AuthService {
     }
   }
 
+  // Force clear all authentication state (for debugging/cleanup)
+  async forceSignOut() {
+    try {
+      console.log('🧹 Force signing out and clearing all auth state...')
+      
+      // Sign out from Supabase
+      await this.supabase.auth.signOut()
+      
+      // Clear browser storage
+      if (typeof window !== 'undefined') {
+        localStorage.clear()
+        sessionStorage.clear()
+        
+        // Clear all cookies
+        document.cookie.split(";").forEach((c) => {
+          const eqPos = c.indexOf("=")
+          const name = eqPos > -1 ? c.substr(0, eqPos).trim() : c.trim()
+          document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/`
+          document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=${window.location.hostname}`
+          document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.${window.location.hostname}`
+        })
+        
+        console.log('✅ All auth state cleared - refreshing page...')
+        window.location.reload()
+      }
+      
+      return { success: true }
+    } catch (error) {
+      console.error('❌ Force sign out error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
   async getCurrentUser() {
     try {
+      console.log('🔍 Getting current user from Supabase...')
       const { data: { user }, error } = await this.supabase.auth.getUser()
       
-      if (error) throw error
-      if (!user) return { user: null, profile: null, error: null }
+      if (error) {
+        console.error('❌ Supabase auth error:', error)
+        
+        // Handle specific JWT/user mismatch errors
+        if (error.message?.includes('User from sub claim in JWT does not exist') || 
+            error.message?.includes('JWT') ||
+            error.status === 401) {
+          console.log('🧹 Invalid token detected, clearing session...')
+          await this.signOut()
+          return { user: null, profile: null, error: 'Session expired' }
+        }
+        
+        throw error
+      }
+      if (!user) {
+        console.log('ℹ️ No authenticated user found')
+        return { user: null, profile: null, error: null }
+      }
 
+      console.log('✅ User found:', user.id, user.email)
+      
+      // Test database connectivity
+      console.log('🔍 Testing database connection...')
+      try {
+        const { error: dbError } = await this.supabase.from('user_profiles').select('count').limit(1)
+        if (dbError) {
+          console.error('❌ Database connection test failed:', dbError)
+        } else {
+          console.log('✅ Database connection successful')
+        }
+      } catch (dbTestError) {
+        console.error('❌ Database test error:', dbTestError)
+      }
+      
       const profile = await this.getUserProfile(user.id)
+      console.log('👤 Profile loaded:', profile ? `${profile.first_name} ${profile.last_name}` : 'No profile')
       return { user, profile, error: null }
     } catch (error) {
-      console.error('Get current user error:', error)
+      console.error('❌ Get current user error:', error)
+      
+      // Handle authentication errors by clearing session
+      if (error instanceof Error && (
+          error.message.includes('JWT') || 
+          error.message.includes('token') ||
+          error.message.includes('User from sub claim')
+        )) {
+        console.log('🧹 Clearing invalid session due to auth error...')
+        await this.signOut()
+        return { 
+          user: null, 
+          profile: null, 
+          error: 'Session expired, please login again' 
+        }
+      }
+      
       return { 
         user: null, 
         profile: null, 
@@ -116,6 +200,8 @@ export class AuthService {
 
   async getUserProfile(userId: string): Promise<UserProfile | null> {
     try {
+      console.log('🔍 Looking for user profile for userId:', userId)
+      
       const { data, error } = await this.supabase
         .from('user_profiles')
         .select('*')
@@ -123,16 +209,29 @@ export class AuthService {
         .single()
 
       if (error) {
+        console.log('⚠️ Database query error:', error)
         if (error.code === 'PGRST116') {
           // No profile found - this is ok for new users
+          console.log('ℹ️ No profile found for user (PGRST116)')
+          return null
+        }
+        if (error.code === 'PGRST301') {
+          console.log('❌ Multiple profiles found - database integrity issue')
           return null
         }
         throw error
       }
 
+      console.log('✅ Profile found:', data)
       return data
     } catch (error) {
-      console.error('Get user profile error:', error)
+      console.error('❌ Get user profile error:', error)
+      console.log('🔍 Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        code: (error as any)?.code,
+        details: (error as any)?.details,
+        hint: (error as any)?.hint
+      })
       return null
     }
   }

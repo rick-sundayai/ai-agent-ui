@@ -47,7 +47,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const initAuth = async () => {
       try {
+        console.log('🔄 Initializing authentication...')
         const { user, profile } = await authService.getCurrentUser()
+        
+        console.log('👤 User:', user ? `${user.id} (${user.email})` : 'No user')
+        console.log('👤 Profile:', profile ? `${profile.first_name} ${profile.last_name} (${profile.role})` : 'No profile')
         
         setState({
           user: user ? { id: user.id, email: user.email || '', profile } : null,
@@ -56,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           error: null
         })
       } catch (error) {
-        console.error('Auth initialization error:', error)
+        console.error('❌ Auth initialization error:', error)
         setState({
           user: null,
           profile: null,
@@ -77,17 +81,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         
         if (event === 'SIGNED_IN' && session?.user) {
           // User signed in - get their profile
-          const profile = await authService.getUserProfile(session.user.id)
-          
-          setState({
-            user: { id: session.user.id, email: session.user.email || '', profile },
-            profile,
-            loading: false,
-            error: null
-          })
-          
-          // Log sign-in activity
-          await authService.logActivity('sign_in', 'auth', session.user.id)
+          try {
+            const profile = await authService.getUserProfile(session.user.id)
+            
+            setState({
+              user: { id: session.user.id, email: session.user.email || '', profile },
+              profile,
+              loading: false,
+              error: null
+            })
+            
+            // Log sign-in activity
+            await authService.logActivity('sign_in', 'auth', session.user.id)
+          } catch (error) {
+            console.error('❌ Error handling sign in:', error)
+            setState({
+              user: null,
+              profile: null,
+              loading: false,
+              error: error instanceof Error ? error.message : 'Authentication error'
+            })
+          }
         } 
         else if (event === 'SIGNED_OUT') {
           // User signed out
@@ -100,14 +114,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         else if (event === 'TOKEN_REFRESHED' && session?.user) {
           // Token refreshed - update user info
-          const profile = await authService.getUserProfile(session.user.id)
-          
-          setState(prev => ({
-            ...prev,
-            user: { id: session.user.id, email: session.user.email || '', profile },
-            profile,
-            error: null
-          }))
+          try {
+            const profile = await authService.getUserProfile(session.user.id)
+            
+            setState(prev => ({
+              ...prev,
+              user: { id: session.user.id, email: session.user.email || '', profile },
+              profile,
+              error: null
+            }))
+          } catch (error) {
+            console.error('❌ Error handling token refresh:', error)
+            // If token refresh fails with user errors, sign out
+            if (error instanceof Error && error.message.includes('User from sub claim')) {
+              console.log('🧹 Signing out due to invalid user in token')
+              await authService.signOut()
+            }
+          }
         }
       }
     )
